@@ -20,14 +20,18 @@ defmodule MonadsTest do
   # The key is "nameYEAR" where name is lowercase for teens
   # and uppercase for adults.
   defp build_key(input) do
-    if input.adult_state do
-      input |> Map.merge(%{key: "#{input.name |> String.upcase()}#{input.yob}"})
-    else
-      input |> Map.merge(%{key: "#{input.name |> String.downcase()}#{input.yob}"})
-    end
+    input |> Map.merge(%{key: "#{format_key(input)}#{input.yob}"})
   end
 
-  # Simmulate a simple repositor (our database)
+  defp format_key(%{adult_state: true} = input) do
+    String.upcase(input.name)
+  end
+
+  defp format_key(input) do
+    String.downcase(input.name)
+  end
+
+  # Simmulate a simple repository (our database)
   defp repo(%{id: id, method: :get}) do
     case id do
       1 -> %{name: "Bob", yob: 1950}
@@ -101,7 +105,7 @@ defmodule MonadsTest do
   end
 
   describe "Piping Monads" do
-    test "Pipe two factories" do
+    test "Pipe two factoriea x = (x+1) * (x+1)" do
       result =
         [1, 2, 3]
         |> annotate(&incrementor/1)
@@ -111,7 +115,7 @@ defmodule MonadsTest do
       assert [4, 9, 16] == result
     end
 
-    test "Pipe one factor multiple times" do
+    test "Pipe one factor multiple times (n^2)^2)^2" do
       result =
         [1, 2, 3]
         |> annotate(&squarer/1)
@@ -123,7 +127,7 @@ defmodule MonadsTest do
     end
   end
 
-  describe "Composing a map with monads" do
+  describe "Composing a map" do
     test "Composing a map" do
       result =
         [%{name: "Bob", yob: 1950}, %{name: "Alice", yob: 2010}]
@@ -140,19 +144,19 @@ defmodule MonadsTest do
 
   describe "Integration" do
     test "Request -> Interactor -> Resonse" do
-      # request_model
-      # |> request from a repo
-      # |> inject adult state (do something with loaded thing and modify the request)
-      # |> build_key depends on adult state (do more modifications based on that before)
-      # |> reduce to get the result which will be returned as a response.
+      # Given, a list of requests
       result =
         [
           %{id: 1, method: :get},
           %{id: 2, method: :get}
         ]
+        # When fetching from the repo
         |> annotate(&repo/1)
+        # And calculating the adult state
         |> annotate(&adult_state/1)
+        # And building a key
         |> annotate(&build_key/1)
+        # Then, the result is ...
         |> reduce()
 
       assert [
@@ -173,17 +177,24 @@ defmodule MonadsTest do
       n
     end
 
-    test "Work in parallel" do
-      max_n = 10
+    test "supports parallel execution" do
+      # GIVEN
+      # an input list of given size
+      input_size = 10
+      # a slow path, takes 10ms
       slow_path = 10
+      # and has to be called twice
       slow_calculations = 2
+      # and a fast_path delaying only 1ms
       fast_path = 1
+      # but has to be executed 10 times
       fast_calculations = 10
-      max_execution = max_n * (slow_path * slow_calculations + fast_path * fast_calculations)
+      # in sequetial execution this would take at least this amount of ms
+      max_execution = input_size * (slow_path * slow_calculations + fast_path * fast_calculations)
 
       ts_start = System.monotonic_time(:millisecond)
 
-      0..max_n
+      0..input_size
       |> Stream.map(& &1)
       |> Flow.from_enumerable()
       # Two slow
@@ -200,11 +211,16 @@ defmodule MonadsTest do
       |> Flow.flat_map(fn n -> annotate([n], &simmulate_fast/1) end)
       |> Flow.flat_map(fn n -> annotate([n], &simmulate_fast/1) end)
       |> Flow.flat_map(fn n -> annotate([n], &simmulate_fast/1) end)
+      # Tell Flow to execute the steps above in parallel
       |> Flow.partition()
+      # Add the accumulating step, calling Monads.reduce
       |> Flow.flat_map(fn n -> reduce([n]) end)
+      # Get the accumulated result
       |> Flow.reduce(fn -> [] end, fn n, acc ->
         [n | acc]
       end)
+      # Finally convert to a list. This is where all the lazy stuff gets
+      # executed.
       |> Enum.to_list()
 
       ts_end = System.monotonic_time(:millisecond)
@@ -221,20 +237,31 @@ defmodule MonadsTest do
         Factor                          : #{factor} times faster.
       """)
 
+      # This is expected to run faster than pure sequential execution.
+      # (Play with `input_size` to figure out where the break even is.
+      # With only a small amount of input, the overhead will be greater
+      # than the winnings through parallelism.)
       assert ts_end - ts_start < max_execution
     end
 
     test "Work in sequence" do
-      max_n = 10
+      # GIVEN
+      # an input list of given size
+      input_size = 10
+      # a slow path, takes 10ms
       slow_path = 10
+      # and has to be called twice
       slow_calculations = 2
+      # and a fast_path delaying only 1ms
       fast_path = 1
+      # but has to be executed 10 times
       fast_calculations = 10
-      max_execution = max_n * (slow_path * slow_calculations + fast_path * fast_calculations)
+      # in sequetial execution this would take at least this amount of ms
+      max_execution = input_size * (slow_path * slow_calculations + fast_path * fast_calculations)
 
       ts_start = System.monotonic_time(:millisecond)
 
-      0..max_n
+      0..input_size
       |> Enum.map(& &1)
       # Two slow
       |> annotate(&simmulate_slow/1)
@@ -267,6 +294,8 @@ defmodule MonadsTest do
         Factor                          : #{factor} times slower.
       """)
 
+      # THEN, with the overhead of `Monads` it's expected to be slower than
+      # pure sequential execution.
       assert ts_end - ts_start > max_execution
     end
   end
