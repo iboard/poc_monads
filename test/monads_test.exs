@@ -2,7 +2,8 @@ defmodule MonadsTest do
   use ExUnit.Case
   doctest Monads
 
-  import Monads, only: [annotate: 2, reduce: 1, reduce: 2]
+  import Monads
+  import Monads.Maybe
 
   def incrementor(n), do: n + 1
   def squarer(n), do: n * n
@@ -297,6 +298,96 @@ defmodule MonadsTest do
       # THEN, with the overhead of `Monads` it's expected to be slower than
       # pure sequential execution.
       assert ts_end - ts_start > max_execution
+    end
+  end
+
+  #
+  # Implementation
+  #
+  describe "Implementations" do
+    test "Monads.Maybe" do
+      m1 = maybe(1)
+      m2 = maybe(nil)
+
+      assert {1, :maybe} == m1
+      assert {nil, :maybe} == m2
+
+      assert 1 == maybe(m1)
+      assert :nothing == maybe(m2)
+    end
+
+    test "Maybe.nothing is ignored in reduce,map,and each " do
+      m1 = maybe(1)
+      m2 = maybe(2)
+      m3 = maybe(nil)
+
+      sum =
+        reduce([m1, m2, m3], 0, fn v, acc ->
+          acc + v
+        end)
+
+      assert 3 == sum
+
+      map =
+        map([m1, m2, m3], fn v ->
+          v
+        end)
+
+      assert [1, 2] == map
+
+      each([m1, m2, m3], fn v ->
+        send(self(), {:ping, v})
+      end)
+
+      [1, 2]
+      |> Enum.each(fn _ ->
+        receive do
+          {:ping, 1} -> assert true, "Called with 1"
+          {:ping, 2} -> assert true, "Called with 2"
+          unexpected -> assert false, "Received unexpected msg: #{inspect(unexpected)}"
+        after
+          1000 ->
+            assert false, "No message received from Monads.each call"
+        end
+      end)
+    end
+
+    test "with error-cumulating-pipe" do
+      f_producing_result = fn value ->
+        {:ok, value}
+      end
+
+      f_producing_error = fn annotated_value ->
+        {:error, "ERROR #{inspect(annotated_value)}"}
+      end
+
+      final_result =
+        accumulate(f_producing_result.(1))
+        |> accumulate(f_producing_result.(2))
+        |> accumulate(f_producing_error.(:wrong_value))
+        |> accumulate(f_producing_result.(3))
+
+      assert [ok: [1, 2, 3], errors: ["ERROR :wrong_value"], warnings: []] == final_result
+    end
+
+    test "pipe to first error" do
+      f_producing_result = fn value ->
+        {:ok, value}
+      end
+
+      f_producing_error = fn annotated_value ->
+        {:error, "ERROR #{inspect(annotated_value)}"}
+      end
+
+      final_result =
+        1
+        |> stop_at_error(f_producing_result.(1))
+        |> stop_at_error(f_producing_result.(2))
+        |> stop_at_error(f_producing_error.(:wrong_value))
+        |> stop_at_error(f_producing_result.(3))
+        |> final()
+
+      assert 2 == final_result
     end
   end
 end

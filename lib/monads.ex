@@ -68,6 +68,91 @@ defmodule Monads do
     end)
   end
 
+  @doc """
+  Do a Enum.reduce but ignore Maybe.nothing
+  """
+  def reduce(annotated_values, start_value, block) do
+    Enum.reduce(annotated_values, start_value, fn m, acc ->
+      case Monads.Maybe.maybe(m) do
+        :nothing -> acc
+        v -> block.(v, acc)
+      end
+    end)
+  end
+
+  @doc """
+  Do a Enum.map but ignore Maybe.nothing
+  """
+  def map(annotated_values, block) do
+    Enum.map(annotated_values, fn m ->
+      case Monads.Maybe.maybe(m) do
+        :nothing -> :nothing
+        v -> block.(v)
+      end
+    end)
+    |> Enum.filter(&(&1 != :nothing))
+  end
+
+  @doc """
+  Do a Enum.each but ignore Maybe.nothing
+  """
+  def each(annotated_values, block) do
+    map(annotated_values, & &1)
+    |> Enum.each(fn m -> block.(m) end)
+  end
+
+  @doc """
+  Pipe through functions returning either {:ok, val} or {:error, reason}
+  and returns [ok: [results], errors: [errors]]
+  """
+  def accumulate([ok: oks, errors: errors, warnings: warnings], {:ok, result}) do
+    [ok: oks ++ [result], errors: errors, warnings: warnings]
+  end
+
+  def accumulate([ok: oks, errors: errors, warnings: warnings], {:error, error}) do
+    [ok: oks, errors: errors ++ [error], warnings: warnings]
+  end
+
+  def accumulate([ok: oks, errors: errors, warnings: warnings], result) do
+    [
+      ok: oks,
+      errors: errors,
+      warnings: warnings ++ ["Ignore #{inspect(result)}"]
+    ]
+  end
+
+  def accumulate(result) do
+    accumulate([ok: [], errors: [], warnings: []], result)
+  end
+
+  @doc """
+    return the state of the pipe before the first
+    error occurs.
+  """
+  def stop_at_error({:stopped, input}, _fun), do: {:stopped, input}
+
+  def stop_at_error({:ok, input}, {:error, _}), do: {:stopped, input}
+  def stop_at_error({:ok, input}, {:ok, value}), do: {:ok, value}
+
+  def stop_at_error({:ok, input}, fun) when is_function(fun) do
+    input |> fun.()
+  end
+
+  def stop_at_error(input, fun) when is_function(fun) do
+    case fun.(input) do
+      {:ok, new_value} -> {:ok, new_value}
+      {:error, _error} -> {:stopped, input}
+      unexpected -> {:stopped, "unexpected: #{inspect(unexpected)}"}
+    end
+  end
+
+  def stop_at_error(input, {:ok, f}), do: stop_at_error({:ok, input}, {:ok, f})
+  def stop_at_error(input, {:error, f}), do: stop_at_error({:ok, input}, {:error, f})
+
+  def final({:stopped, last_result}), do: last_result
+  def final({:ok, result}), do: result
+  def final(unexpected), do: {:error, inspect(unexpected)}
+
   # [
   #   {{{1, F1}, F1}, F2},
   #   {{{2, F1}, F2}, F2}
